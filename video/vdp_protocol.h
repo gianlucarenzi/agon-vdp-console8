@@ -14,15 +14,22 @@
 
 #include "agon.h"								// Configuration file
 
+#ifndef VDP_RETROBIT_LAB
 #define VDPSerial Serial2
+#else
+#define VDPSerial Serial1
+#warning "VDPSerial Serial0 for RETROBITLAB"
+#endif
 
 void setupVDPProtocol() {
 	VDPSerial.end();
 	VDPSerial.setRxBufferSize(UART_RX_SIZE);					// Can't be called when running
 	VDPSerial.begin(UART_BR, SERIAL_8N1, UART_RX, UART_TX);
+#ifndef VDP_RETROBIT_LAB
 	VDPSerial.setHwFlowCtrlMode(HW_FLOWCTRL_RTS, 64);			// Can be called whenever
 	VDPSerial.setPins(UART_NA, UART_NA, UART_CTS, UART_RTS);	// Must be called after begin
 	VDPSerial.setTimeout(COMMS_TIMEOUT);
+#endif
 }
 
 // TODO remove the following - it's only here for cursor.h to send escape key when doing paged mode handling
