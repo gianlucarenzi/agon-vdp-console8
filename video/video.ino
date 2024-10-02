@@ -208,6 +208,9 @@ void boot_screen() {
 	#ifdef VERSION_BUILD
 		printFmt(" Build %s", VERSION_BUILD);
 	#endif
+	#ifdef VDP_RETROBIT_LAB
+		printFmt(" RetroBitLab Version (master branch)");
+	#endif
 	printFmt("\n\r");
 }
 
