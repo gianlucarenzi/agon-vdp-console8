@@ -15,6 +15,9 @@
 
 #pragma once
 
+#define VDP_RETROBIT_LAB
+//#undef VDP_RETROBIT_LAB
+
 #define EPOCH_YEAR				1980	// 1-byte dates are offset from this (for FatFS)
 #define MAX_SPRITES				256		// Maximum number of sprites
 #define MAX_BITMAPS				256		// Maximum number of bitmaps
@@ -27,6 +30,16 @@
 #define UART_RX					34
 #define UART_RTS				13		// The ESP32 RTS pin (eZ80 CTS)
 #define UART_CTS	 			14		// The ESP32 CTS pin (eZ80 RTS)
+
+#ifdef VDP_RETROBIT_LAB
+    #undef UART_BR
+    #undef UART_TX
+    #undef UART_RX
+    #define UART_BR             57600   // Atari POKEY should do that
+    #define UART_TX             1
+    #define UART_RX             3
+	#warning "VDPSerial for RETROBITLAB @ 57600 on UART0 Pins"
+#endif
 
 #define COMMS_TIMEOUT			200		// Timeout for VDP commands (ms)
 #define FAST_COMMS_TIMEOUT		10		// Fast timeout for VDP commands (ms)
