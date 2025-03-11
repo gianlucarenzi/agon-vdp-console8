@@ -165,6 +165,24 @@ void VDUStreamProcessor::vdu_sys_sprites() {
 			setSpritePaintMode(b);
 		}	break;
 
+		case 19: {	// Set sprite as hardware
+			if (isFeatureFlagSet(TESTFLAG_HW_SPRITES)) {
+				setSpriteHardware();
+				debug_log("vdu_sys_sprites: sprite %d is hardware\n\r", getCurrentSprite());
+			}
+		}	break;
+
+		case 20: {	// Set sprite as software
+			setSpriteSoftware();
+			debug_log("vdu_sys_sprites: sprite %d is software\n\r", getCurrentSprite());
+		}	break;
+
+		case 21: {	// Replace current sprite frame with bitmap
+			auto b = readByte_t(); if (b == -1) return;
+			replaceSpriteFrame(b + BUFFERED_BITMAP_BASEID);
+			debug_log("vdu_sys_sprites: sprite %d - replace frame %d\n\r", getCurrentSprite(), b);
+		}	break;
+
 		// Extended bitmap commands
 		case 0x20: {	// Select bitmap, 16-bit buffer ID
 			auto b = readWord_t(); if (b == -1) return;
@@ -189,6 +207,12 @@ void VDUStreamProcessor::vdu_sys_sprites() {
 			auto bufferId = readWord_t(); if (bufferId == -1) return;
 			addSpriteFrame(bufferId);
 			debug_log("vdu_sys_sprites: sprite %d - bitmap %d added as frame %d\n\r", getCurrentSprite(), bufferId, getSprite()->framesCount-1);
+		}	break;
+
+		case 0x35: {	// Replace current sprite frame with bitmap (long ID)
+			auto bufferId = readWord_t(); if (bufferId == -1) return;
+			replaceSpriteFrame(bufferId);
+			debug_log("vdu_sys_sprites: sprite %d - replace frame with bitmap %d\n\r", getCurrentSprite(), bufferId);
 		}	break;
 
 		case 0x40: {	// Setup mouse cursor from current bitmap

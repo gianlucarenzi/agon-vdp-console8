@@ -21,6 +21,8 @@ std::unordered_map<uint16_t, ContextVectorPtr,
 	std::hash<uint16_t>, std::equal_to<uint16_t>,
 	psram_allocator<std::pair<const uint16_t, ContextVectorPtr>>> contextStacks;
 
+extern uint16_t getFeatureFlag(uint16_t flag);
+
 class VDUStreamProcessor {
 	private:
 		std::shared_ptr<Stream> inputStream;
@@ -32,6 +34,10 @@ class VDUStreamProcessor {
 		ContextVectorPtr contextStack;			// Current active context stack
 
 		bool commandsEnabled = true;
+		bool echoEnabled = false;
+		bool echoBuffering = false;
+
+		std::vector<uint8_t> echoBuffer;
 
 		int16_t readByte_t(uint16_t timeout);
 		int32_t readWord_t(uint16_t timeout);
@@ -43,11 +49,15 @@ class VDUStreamProcessor {
 		float readFloat_t(bool is16Bit, bool isFixed, int8_t shift, uint16_t timeout);
 		bool readFloatArguments(float *values, int count, bool useBufferValue, bool useAdvancedOffsets, bool useMultiFormat);
 
+		inline void pushEcho(uint8_t c);
+		void pushEcho(uint8_t * chars, uint32_t length);
+		inline void clearEcho();
+		void flushEcho();
+
 		void vdu_print(char c, bool usePeek);
 		void vdu_colour();
 		void vdu_gcol();
 		void vdu_palette();
-		void vdu_mode();
 		void vdu_graphicsViewport();
 		void vdu_plot();
 		void vdu_resetViewports();
@@ -69,6 +79,7 @@ class VDUStreamProcessor {
 		void sendKeyboardState();
 		void vdu_sys_keystate();
 		void vdu_sys_mouse();
+		void vdu_sys_copper();
 		void vdu_sys_scroll();
 		void vdu_sys_cursorBehaviour();
 		void vdu_sys_udg(char c);
@@ -87,7 +98,6 @@ class VDUStreamProcessor {
 		void vdu_sys_font();
 
 		void vdu_sys_context();
-		void selectContext(uint8_t contextId);
 		bool resetContext(uint8_t flags);
 		void saveContext();
 		void restoreContext();
@@ -131,37 +141,125 @@ class VDUStreamProcessor {
 		void bufferMatrixManipulate(uint16_t bufferId, uint8_t command, MatrixSize size);
 		void bufferTransformBitmap(uint16_t bufferId, uint8_t options, uint16_t transformBufferId, uint16_t sourceBufferId);
 		void bufferTransformData(uint16_t bufferId, uint8_t options, uint8_t format, uint16_t transformBufferId, uint16_t sourceBufferId);
+		void bufferReadFlag(uint16_t bufferId);
 		void bufferCompress(uint16_t bufferId, uint16_t sourceBufferId);
 		void bufferDecompress(uint16_t bufferId, uint16_t sourceBufferId);
 		void bufferExpandBitmap(uint16_t bufferId, uint8_t options, uint16_t sourceBufferId);
+		void bufferAddCallback(uint16_t bufferId, uint16_t type);
+		void bufferRemoveCallback(uint16_t bufferId, uint16_t type);
 
 		void vdu_sys_updater();
 		void unlock();
 		void receiveFirmware();
 		void switchFirmware();
 
+		// Begin: Tile Engine
+
+		void vdu_sys_layers();
+		void vdu_sys_layers_tilebank_init(uint8_t tileBankNum, uint8_t tileBankBitDepth);
+		void vdu_sys_layers_tilebank_load(uint8_t tileBankNum, uint8_t tileId);
+		void vdu_sys_layers_tilebank_draw(uint8_t tileBankNum, uint8_t tileId, uint8_t palette, uint8_t x, uint8_t y, uint8_t xOffset, uint8_t yOffset, uint8_t tileAttribute);
+		void vdu_sys_layers_tilebank_free(uint8_t tileBankNum);
+		void vdu_sys_layers_tilemap_init(uint8_t tileLayerNum, uint8_t tileMapSize);
+		void vdu_sys_layers_tilemap_set(uint8_t tileLayerNum, uint8_t x, uint8_t y, uint8_t tileId, uint8_t tileAttribute);
+		void vdu_sys_layers_tilemap_free(uint8_t tileMapNum);
+		void vdu_sys_layers_tilelayer_init(uint8_t tileLayerNum, uint8_t tileLayerSize, uint8_t tileSize);
+		void vdu_sys_layers_tilelayer_set_scroll(uint8_t tileLayerNum, uint8_t x, uint8_t y, uint8_t xOffset, uint8_t yOffset);
+		void vdu_sys_layers_tilelayer_update_layerbuffer(uint8_t tileLayerNum);
+		void vdu_sys_layers_tilelayer_draw_layerbuffer(uint8_t tileLayerNum);
+		void vdu_sys_layers_tilelayer_draw(uint8_t tileLayerNum);
+		void vdu_sys_layers_tilelayer_free(uint8_t tileLayerNum);
+		void writeTileToBuffer(uint8_t tileId, uint8_t tileCount, uint8_t xOffset, uint8_t tileBuffer[], uint8_t tileLayerWidth);
+		void writeTileToBufferFlipX(uint8_t tileId, uint8_t tileCount, uint8_t xOffset, uint8_t tileBuffer[], uint8_t tileLayerWidth);
+		void writeTileToBufferFlipY(uint8_t tileId, uint8_t tileCount, uint8_t xOffset, uint8_t tileBuffer[], uint8_t tileLayerWidth);
+		void writeTileToBufferFlipXY(uint8_t tileId, uint8_t tileCount, uint8_t xOffset, uint8_t tileBuffer[], uint8_t tileLayerWidth);
+
+		void writeTileToLayerBuffer(uint8_t tileId, uint8_t xPos, uint8_t xOffset, uint8_t yPos, uint8_t yOffset, uint8_t * tileBuffer,  uint8_t tileLayerHeight, uint8_t tileLayerWidth);
+		void writeTileToLayerBufferFlipX(uint8_t tileId, uint8_t xPos, uint8_t xOffset, uint8_t yPos, uint8_t yOffset, uint8_t * tileBuffer, uint8_t tileLayerHeight, uint8_t tileLayerWidth);
+		void writeTileToLayerBufferFlipY(uint8_t tileId, uint8_t xPos, uint8_t xOffset, uint8_t yPos, uint8_t yOffset, uint8_t * tileBuffer, uint8_t tileLayerHeight, uint8_t tileLayerWidth);
+		void writeTileToLayerBufferFlipXY(uint8_t tileId, uint8_t xPos, uint8_t xOffset, uint8_t yPos, uint8_t yOffset, uint8_t * tileBuffer, uint8_t tileLayerHeight, uint8_t tileLayerWidth);
+
+		// Tile Bank variables
+
+		void * tileBank0Data = NULL;
+		uint8_t * tileBank0Ptr;
+
+		Bitmap currentTile; 
+		uint8_t currentTileDataBuffer[64];
+
+		// Tile Map variables
+
+		struct Tile {
+			uint8_t	id;
+			uint8_t attribute;
+		};
+
+		struct Tile** tileMap0 = NULL;
+
+		struct TileMap {
+			uint8_t height;
+			uint8_t width;
+		};
+
+		TileMap tileMap0Properties;
+
+		// Tile Layer variables
+
+		Bitmap currentRow;
+		uint8_t currentRowDataBuffer[5184];		// Buffer big enough for 64 byte tiles * 81 columns (the largest supported size +1)
+
+		Bitmap tileLayer0Bitmap;					// Bitmap that points to the Layer 0 buffer
+
+		void * tileLayer0Buffer = NULL;				// The offscreen buffer for Layer 0
+
+		uint8_t * tileLayer0Ptr;					// A pointer to he tileLayer0Buffer
+
+		struct TileLayer {
+			uint8_t height;
+			uint8_t width;
+			uint8_t sourceXPos;
+			uint8_t sourceYPos;
+			uint8_t xOffset;
+			uint8_t yOffset;
+			uint8_t attribute;
+			uint8_t backgroundColour = 0;			// Default the background colour of the layer to 0 (transparent)
+		};
+
+		TileLayer tileLayer0;
+		TileLayer tileLayer1;
+		TileLayer tileLayer2;
+
+		uint8_t tileLayer0init = 0;		
+
+		// End: Tile Engine
+
 	public:
 		uint16_t id = 65535;
+		uint8_t contextId = 0;					// Current active context ID
 
-		VDUStreamProcessor(std::shared_ptr<Context> _context, std::shared_ptr<Stream> input, std::shared_ptr<Stream> output, uint16_t bufferId) :
-			context(_context), inputStream(std::move(input)), outputStream(std::move(output)), originalOutputStream(outputStream), id(bufferId) {
-				// NB this will become obsolete when merging in the buffered command optimisations
-				context = make_shared_psram<Context>(*_context);
-				contextStack = make_shared_psram<ContextVector>();
-				contextStack->push_back(context);
-			}
 		VDUStreamProcessor(Stream *input) :
 			inputStream(std::shared_ptr<Stream>(input)), outputStream(inputStream), originalOutputStream(inputStream) {
-				context = make_shared_psram<Context>();
-				contextStack = make_shared_psram<ContextVector>();
-				contextStack->push_back(context);
+				contextId = 0;
+				// Get the default context stack, if it exists
+				// (NB this will only be possible when we support multiple stream processors)
+				if (contextExists(0)) {
+					contextStack = contextStacks[0];
+					context = contextStack->back();
+				} else {
+					context = make_shared_psram<Context>();
+					contextStack = make_shared_psram<ContextVector>();
+					contextStacks[0] = contextStack;
+					contextStack->push_back(context);
+				}
 			}
 
 		inline bool byteAvailable() {
 			return inputStream->available() > 0;
 		}
 		inline uint8_t readByte() {
-			return inputStream->read();
+			auto read = inputStream->read();
+			pushEcho(read);
+			return read;
 		}
 		inline void writeByte(uint8_t b) {
 			if (outputStream) {
@@ -189,12 +287,33 @@ class VDUStreamProcessor {
 		void wait_eZ80();
 		void sendModeInformation();
 
+		void setEcho(bool enabled) {
+			flushEcho();
+			echoEnabled = enabled;
+			if (!enabled) {
+				// Send an echo end packet
+				auto handle = getFeatureFlag(FEATUREFLAG_ECHO);
+				if (handle == 0) {
+					return;
+				}
+				uint8_t packet[] = {
+					static_cast<uint8_t>(handle & 0xFF),
+				};
+				send_packet(PACKET_ECHO_END, sizeof packet, packet);
+			}
+		}
+
 		std::shared_ptr<Context> getContext() {
 			return context;
 		}
 		bool contextExists(uint8_t id) {
 			return contextStacks.find(id) != contextStacks.end();
 		}
+		void selectContext(uint8_t contextId);
+
+		void vdu_mode(uint8_t mode);
+
+		void bufferCallCallbacks(uint16_t type);
 };
 
 // Read an unsigned byte from the serial port, with a timeout
@@ -204,6 +323,7 @@ class VDUStreamProcessor {
 int16_t inline VDUStreamProcessor::readByte_t(uint16_t timeout = COMMS_TIMEOUT) {
 	auto read = inputStream->read();
 	if (read != -1) {
+		pushEcho(read);
 		return read;
 	}
 
@@ -212,11 +332,8 @@ int16_t inline VDUStreamProcessor::readByte_t(uint16_t timeout = COMMS_TIMEOUT) 
 
 	do {
 		read = inputStream->read();
-		if (read != -1) {
-			return read;
-		}
-	} while (xTaskGetTickCountFromISR() - start < timeCheck);
-
+	} while (read == -1 && (xTaskGetTickCountFromISR() - start < timeCheck));
+	pushEcho(read);
 	return read;
 }
 
@@ -282,6 +399,7 @@ uint32_t VDUStreamProcessor::readIntoBuffer(uint8_t * buffer, uint32_t length, u
 				return remaining;
 			}
 		}
+		pushEcho(buffer, read);
 		buffer += read;
 		remaining -= read;
 	}
@@ -428,6 +546,7 @@ void VDUStreamProcessor::sendMouseData(MouseDelta * delta = nullptr) {
 //
 void VDUStreamProcessor::processAllAvailable() {
 	while (byteAvailable()) {
+		flushEcho();
 		vdu(readByte());
 	}
 }
@@ -436,8 +555,66 @@ void VDUStreamProcessor::processAllAvailable() {
 //
 void VDUStreamProcessor::processNext() {
 	if (byteAvailable()) {
+		flushEcho();
 		vdu(readByte());
 	}
+}
+
+inline void VDUStreamProcessor::pushEcho(uint8_t c) {
+	if (echoBuffering) {
+		echoBuffer.push_back(c);
+	}
+}
+
+void VDUStreamProcessor::pushEcho(uint8_t * chars, uint32_t length) {
+	if (echoBuffering) {
+		for (uint32_t i = 0; i < length; i++) {
+			echoBuffer.push_back(chars[i]);
+		}
+	}
+}
+
+inline void VDUStreamProcessor::clearEcho() {
+	echoBuffering = false;
+	echoBuffer.clear();
+}
+
+void VDUStreamProcessor::flushEcho() {
+	echoBuffering = echoEnabled;
+
+	if (!echoEnabled || echoBuffer.empty()) {
+		return;
+	}
+
+	uint32_t bufferSize = getFeatureFlag(FEATUREFLAG_MOS_VDPP_BUFFERSIZE);
+	if (bufferSize == 0) {
+		bufferSize = 16;
+	}
+	debug_log("Echo buffer size: %d\n\r", bufferSize);
+
+	// Iterate over the echoBuffer, sending packets of max bufferSize bytes
+	uint32_t remaining = echoBuffer.size();
+	uint32_t offset = 0;
+	while (remaining > 0) {
+		uint32_t packetSize = remaining > bufferSize ? bufferSize : remaining;
+		uint8_t packet[bufferSize];
+		for (uint32_t i = 0; i < packetSize; i++) {
+			packet[i] = echoBuffer[offset + i];
+		}
+		send_packet(PACKET_ECHO, packetSize, packet);
+		debug_log("Echo %.*s\n\r", packetSize, packet);
+		offset += packetSize;
+		remaining -= packetSize;
+	}
+
+	// // send echo buffer as hex to debug log
+	// debug_log("Echo: ");
+	// for (auto c : echoBuffer) {
+	// 	debug_log("%02X ", c);
+	// }
+	// debug_log("\n\r");
+	
+	echoBuffer.clear();
 }
 
 #include "vdu.h"

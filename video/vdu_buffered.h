@@ -18,7 +18,7 @@
 #include "mem_helpers.h"
 #include "multi_buffer_stream.h"
 #include "sprites.h"
-#include "test_flags.h"
+#include "feature_flags.h"
 #include "types.h"
 #include "vdu_stream_processor.h"
 
@@ -192,15 +192,15 @@ void IRAM_ATTR VDUStreamProcessor::vdu_sys_buffered() {
 			}
 			bufferCopyAndConsolidate(bufferId, sourceBufferIds);
 		}	break;
-		case BUFFERED_AFFINE_TRANSFORM: if (isTestFlagSet(TEST_FLAG_AFFINE_TRANSFORM)) {
+		case BUFFERED_AFFINE_TRANSFORM: if (isFeatureFlagSet(TESTFLAG_AFFINE_TRANSFORM)) {
 			auto operation = readByte_t(); if (operation == -1) return;
 			bufferAffineTransform(bufferId, operation, false);
 		}	break;
-		case BUFFERED_AFFINE_TRANSFORM_3D: if (isTestFlagSet(TEST_FLAG_AFFINE_TRANSFORM)) {
+		case BUFFERED_AFFINE_TRANSFORM_3D: if (isFeatureFlagSet(TESTFLAG_AFFINE_TRANSFORM)) {
 			auto operation = readByte_t(); if (operation == -1) return;
 			bufferAffineTransform(bufferId, operation, true);
 		}	break;
-		case BUFFERED_MATRIX: if (isTestFlagSet(TEST_FLAG_AFFINE_TRANSFORM)) {
+		case BUFFERED_MATRIX: if (isFeatureFlagSet(TESTFLAG_AFFINE_TRANSFORM)) {
 			auto operation = readByte_t(); if (operation == -1) return;
 			auto rows = readByte_t(); if (rows == -1) return;
 			auto columns = readByte_t(); if (columns == -1) return;
@@ -209,7 +209,7 @@ void IRAM_ATTR VDUStreamProcessor::vdu_sys_buffered() {
 			size.columns = columns;
 			bufferMatrixManipulate(bufferId, operation, size);
 		}	break;
-		case BUFFERED_TRANSFORM_BITMAP: if (isTestFlagSet(TEST_FLAG_AFFINE_TRANSFORM)) {
+		case BUFFERED_TRANSFORM_BITMAP: if (isFeatureFlagSet(TESTFLAG_AFFINE_TRANSFORM)) {
 			auto options = readByte_t();
 			auto transformBufferId = readWord_t();
 			auto bitmapId = readWord_t();
@@ -218,7 +218,7 @@ void IRAM_ATTR VDUStreamProcessor::vdu_sys_buffered() {
 			}
 			bufferTransformBitmap(bufferId, options, transformBufferId, bitmapId);
 		}	break;
-		case BUFFERED_TRANSFORM_DATA: if (isTestFlagSet(TEST_FLAG_AFFINE_TRANSFORM)) {
+		case BUFFERED_TRANSFORM_DATA: if (isFeatureFlagSet(TESTFLAG_AFFINE_TRANSFORM)) {
 			// VDU 23, 0, &A0, bufferId; &29, options, format, transformBufferId; sourceBufferId; : Apply transform matrix to data in a buffer
 			auto options = readByte_t();
 			auto format = readByte_t();
@@ -228,6 +228,10 @@ void IRAM_ATTR VDUStreamProcessor::vdu_sys_buffered() {
 				return;
 			}
 			bufferTransformData(bufferId, options, format, transformBufferId, sourceBufferId);
+		}	break;
+		case BUFFERED_READ_FLAG: {
+			// VDU 23, 0, &A0, bufferId; &30, flags, offset; flagId; [default[;]]
+			bufferReadFlag(bufferId);
 		}	break;
 		case BUFFERED_COMPRESS: {
 			auto sourceBufferId = readWord_t();
@@ -245,6 +249,14 @@ void IRAM_ATTR VDUStreamProcessor::vdu_sys_buffered() {
 			if (sourceBufferId == -1) return;
 			bufferExpandBitmap(bufferId, options, sourceBufferId);
 		}	break;
+		case BUFFERED_ADD_CALLBACK: {
+			auto type = readWord_t(); if (type == -1) return;
+			bufferAddCallback(bufferId, type);
+		}	break;
+		case BUFFERED_REMOVE_CALLBACK: {
+			auto type = readWord_t(); if (type == -1) return;
+			bufferRemoveCallback(bufferId, type);
+		}	break;
 		case BUFFERED_DEBUG_INFO: {
 			// force_debug_log("vdu_sys_buffered: debug info stack highwater %d\n\r",uxTaskGetStackHighWaterMark(nullptr));
 			force_debug_log("vdu_sys_buffered: buffer %d, %d streams stored\n\r", bufferId, buffers[bufferId].size());
@@ -253,7 +265,7 @@ void IRAM_ATTR VDUStreamProcessor::vdu_sys_buffered() {
 			}
 			auto matrixSize = getMatrixSize(bufferId);
 			if (matrixSize.value != 0) {
-				float transform[matrixSize.size()] = {0.0f};
+				float transform[matrixSize.size()];
 				if (getMatrixFromBuffer(bufferId, transform, matrixSize)) {
 					force_debug_log("buffer contains a %d x %d matrix with contents:\n\r", matrixSize.rows, matrixSize.columns);
 					for (int i = 0; i < matrixSize.rows; i++) {
@@ -339,6 +351,7 @@ void VDUStreamProcessor::bufferCall(uint16_t callBufferId, AdvancedOffset offset
 	auto bufferIter = buffers.find(bufferId);
 	if (bufferIter == buffers.end()) {
 		debug_log("bufferCall: buffer %d not found\n\r", bufferId);
+		bufferRemoveCallback(bufferId, 65535);
 		return;
 	}
 	auto &streams = bufferIter->second;
@@ -1031,53 +1044,69 @@ void VDUStreamProcessor::bufferAdjust(uint16_t adjustBufferId) {
 //
 bool VDUStreamProcessor::bufferConditional() {
 	auto command = readByte_t();
-	auto checkBufferId = resolveBufferId(readWord_t(), id);
+	if (command == -1) {
+		debug_log("bufferConditional: invalid command\n\r");
+		return false;
+	}
 
 	bool useAdvancedOffsets = command & COND_ADVANCED_OFFSETS;
-	bool useBufferValue = command & COND_BUFFER_VALUE;
+	bool useBufferValue = command & COND_BUFFER_VALUE;	// Operand is a buffer value
+	bool useFlagValue = command & COND_FLAG_VALUE;	// source to check is a feature flag
+	bool use16BitValue = command & COND_16BIT;	// source and operand are 16-bit values
+
+	auto checkBufferId = useFlagValue ? readWord_t() : resolveBufferId(readWord_t(), id);
+	
 	uint8_t op = command & COND_OP_MASK;
 	// conditional operators that are greater than NOT_EXISTS require an operand
 	bool hasOperand = op > COND_NOT_EXISTS;
 
-	auto offset = getOffsetFromStream(useAdvancedOffsets);
-	const BufferVector * operandBuffer = nullptr;
+	AdvancedOffset offset = {};
+	if (!useFlagValue) {
+		offset = getOffsetFromStream(useAdvancedOffsets);
+	}
+
 	auto operandBufferId = 0;
 	AdvancedOffset operandOffset = {};
-
 	if (useBufferValue && hasOperand) {
 		operandBufferId = resolveBufferId(readWord_t(), id);
 		operandOffset = getOffsetFromStream(useAdvancedOffsets);
-		if (operandBufferId == -1) {
-			debug_log("bufferConditional: no operand buffer ID\n\r");
-			return false;
-		}
-		auto operandBufferIter = buffers.find(operandBufferId);
-		if (operandBufferIter == buffers.end()) {
-			debug_log("bufferConditional: buffer %d not found\n\r", operandBufferId);
-			return false;
-		}
-		operandBuffer = &operandBufferIter->second;
 	}
 
-	if (command == -1 || checkBufferId == -1 || offset.blockOffset == -1 || operandOffset.blockOffset == -1) {
+	if (checkBufferId == -1 || offset.blockOffset == -1 || operandOffset.blockOffset == -1) {
 		debug_log("bufferConditional: invalid command, checkBufferId, offset or operand value\n\r");
 		return false;
 	}
 
-	auto checkBufferIter = buffers.find(checkBufferId);
-	if (checkBufferIter == buffers.end()) {
-		debug_log("bufferConditional: buffer %d not found\n\r", checkBufferId);
-		return false;
+	int32_t sourceValue = -1;
+	if (useFlagValue) {
+		if (isFeatureFlagSet(checkBufferId)) {
+			sourceValue = getFeatureFlag(checkBufferId);
+			if (!use16BitValue) {
+				sourceValue &= 0xFF;
+			}
+		}
+	} else {
+		readBufferBytes(checkBufferId, offset, &sourceValue, use16BitValue ? 2 : 1);
 	}
-	auto &checkBuffer = checkBufferIter->second;
-	auto sourceValue = getBufferByte(checkBuffer, offset);
-	int16_t operandValue = 0;
+
+	int32_t operandValue = hasOperand ? -1 : 0;
 	if (hasOperand) {
-		operandValue = operandBuffer ? getBufferByte(*operandBuffer, operandOffset) : readByte_t();
+		if (useBufferValue) {
+			readBufferBytes(operandBufferId, operandOffset, &operandValue, use16BitValue ? 2 : 1);
+		} else {
+			operandValue = use16BitValue ? readWord_t() : readByte_t();
+		}
 	}
 
 	debug_log("bufferConditional: command %d, checkBufferId %d, offset %d:%d, operandBufferId %d, operandOffset %d:%d, sourceValue %d, operandValue %d\n\r",
 		command, checkBufferId, (int)offset.blockIndex, offset.blockOffset, operandBufferId, (int)operandOffset.blockIndex, operandOffset.blockOffset, sourceValue, operandValue);
+
+	if (useFlagValue && op <= COND_NOT_EXISTS) {	// Flag existence is a pure check, not check for zero
+		if (op == COND_NOT_EXISTS) {
+			return sourceValue == -1;
+		}
+		return sourceValue != -1;
+	}
 
 	if (sourceValue == -1 || operandValue == -1) {
 		debug_log("bufferConditional: invalid source or operand value\n\r");
@@ -1144,6 +1173,7 @@ void VDUStreamProcessor::bufferJump(uint16_t bufferId, AdvancedOffset offset) {
 	auto bufferIter = buffers.find(bufferId);
 	if (bufferIter == buffers.end()) {
 		debug_log("bufferJump: buffer %d not found\n\r", bufferId);
+		bufferRemoveCallback(bufferId, 65535);
 		return;
 	}
 	// replace our input stream with a new one
@@ -1580,7 +1610,8 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 	MatrixSize size;
 	size.rows = dimensions + 1;
 	size.columns = size.rows;
-	float transform[size.size()] = {0.0f};
+	float transform[size.size()];
+	memset(transform, 0, sizeof(transform));
 	for (int i = 0; i < size.rows; i++) {
 		transform[i * size.rows + i] = 1.0f;
 	}
@@ -1657,7 +1688,8 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 		}	break;
 		case AFFINE_SCALE: {
 			// scale by a given factor in each dimension
-			float scales[dimensions] = {0.0f};
+			float scales[dimensions];
+			memset(scales, 0, sizeof(scales));
 			if (!readFloatArguments(scales, dimensions, useBufferValue, useAdvancedOffsets, useMultiFormat)) {
 				return;
 			}
@@ -1667,7 +1699,8 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 		}	break;
 		case AFFINE_TRANSLATE: {
 			// translate by a given amount
-			float translateXY[dimensions] = {0.0f};
+			float translateXY[dimensions];
+			memset(translateXY, 0, sizeof(translateXY));
 			if (!readFloatArguments(translateXY, dimensions, useBufferValue, useAdvancedOffsets, useMultiFormat)) {
 				return;
 			}
@@ -1677,7 +1710,8 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 		}	break;
 		case AFFINE_TRANSLATE_OS_COORDS: {
 			// translate by a given amount of pixels where x and y match current coordinate system scaling
-			float translateXY[dimensions] = {0.0f};
+			float translateXY[dimensions];
+			memset(translateXY, 0, sizeof(translateXY));
 			if (!readFloatArguments(translateXY, dimensions, useBufferValue, useAdvancedOffsets, useMultiFormat)) {
 				return;
 			}
@@ -1690,7 +1724,8 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 		}	break;
 		case AFFINE_SHEAR: {
 			// shear by a given amount
-			float shearXY[dimensions] = {0.0f};
+			float shearXY[dimensions];
+			memset(shearXY, 0, sizeof(shearXY));
 			if (!readFloatArguments(shearXY, dimensions, useBufferValue, useAdvancedOffsets, useMultiFormat)) {
 				return;
 			}
@@ -1702,7 +1737,8 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 		case AFFINE_SKEW_RAD: {
 			// skew by a given amount (angle)
 			bool conversion = op == AFFINE_SKEW ? DEG_TO_RAD : 1.0f;
-			float skewXY[dimensions] = {0.0f};
+			float skewXY[dimensions];
+			memset(skewXY, 0, sizeof(skewXY));
 			if (!readFloatArguments(skewXY, dimensions, useBufferValue, useAdvancedOffsets, useMultiFormat)) {
 				return;
 			}
@@ -1744,10 +1780,11 @@ void VDUStreamProcessor::bufferAffineTransform(uint16_t bufferId, uint8_t comman
 	if (!replace) {
 		// we are combining - for now, only if the existing matrix is the same size
 		// TODO consider handling different size matrices - could combine at larger size, and then truncate
-		float existing[size.size()] = {0.0f};
+		float existing[size.size()];
+		memset(existing, 0, sizeof(existing));
 		if (getMatrixFromBuffer(bufferId, existing, size, false)) {
 			// combine the two matrices together
-			float newTransform[size.size()] = {0.0f};
+			float newTransform[size.size()];
 			dspm_mult_f32(transform, existing, newTransform, size.rows, size.columns, size.columns);
 			// copy data from matrix back to our working transform matrix
 			memcpy(transform, newTransform, size.sizeBytes());
@@ -1775,7 +1812,8 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 	const bool useAdvancedOffsets = command & MATRIX_OP_ADVANCED_OFFSETS;
 	const bool useBufferValue = command & MATRIX_OP_BUFFER_VALUE;
 
-	float matrix[size.size()] = {0.0f};
+	float matrix[size.size()];
+	memset(matrix, 0, sizeof(matrix));
 	
 	switch (op) {
 		case MATRIX_SET: {
@@ -1817,7 +1855,8 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 		case MATRIX_DIAGONAL: {
 			// diagonal matrix with given values
 			auto argCount = fabgl::imin(size.rows, size.columns);
-			float args[argCount] = {0.0f};
+			float args[argCount];
+			memset(args, 0, sizeof(args));
 			if (!readFloatArguments(args, argCount, useBufferValue, useAdvancedOffsets, false)) {
 				return;
 			}
@@ -1830,7 +1869,8 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 			auto sourceId1 = readWord_t(); if (sourceId1 == -1) return;
 			auto sourceId2 = readWord_t(); if (sourceId2 == -1) return;
 			// Get the matrixes, for our target size, padding or truncating as necessary
-			float source[size.size()] = {0.0f};
+			float source[size.size()];
+			memset(source, 0, sizeof(source));
 			if (!getMatrixFromBuffer(sourceId1, matrix, size) || !getMatrixFromBuffer(sourceId2, source, size)) {
 				debug_log("bufferMatrixManipulate: failed to read matrix from buffer %d or %d\n\r", sourceId1, sourceId2);
 				return;
@@ -1845,7 +1885,8 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 			auto sourceId1 = readWord_t(); if (sourceId1 == -1) return;
 			auto sourceId2 = readWord_t(); if (sourceId2 == -1) return;
 			// Get the matrixes, for our target size, padding or truncating as necessary
-			float source[size.size()] = {0.0f};
+			float source[size.size()];
+			memset(source, 0, sizeof(source));
 			if (!getMatrixFromBuffer(sourceId1, matrix, size) || !getMatrixFromBuffer(sourceId2, source, size)) {
 				debug_log("bufferMatrixManipulate: failed to read matrix from buffer %d or %d\n\r", sourceId1, sourceId2);
 				return;
@@ -1871,14 +1912,17 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 			MatrixSize resultSize;
 			resultSize.rows = dimensions;
 			resultSize.columns = dimensions;
-			float source1[resultSize.size()] = {0.0f};
-			float source2[resultSize.size()] = {0.0f};
+			float source1[resultSize.size()];
+			float source2[resultSize.size()];
+			memset(source1, 0, sizeof(source1));
+			memset(source2, 0, sizeof(source2));
 			if (!getMatrixFromBuffer(sourceId1, source1, resultSize) || !getMatrixFromBuffer(sourceId2, source2, resultSize)) {
 				debug_log("bufferMatrixManipulate: failed to read matrix from buffer %d or %d\n\r", sourceId1, sourceId2);
 				return;
 			}
 			// multiply values in source1 and source2
-			float result[resultSize.size()] = {0.0f};
+			float result[resultSize.size()];
+			memset(result, 0, sizeof(result));
 			dspm_mult_f32(source1, source2, result, resultSize.rows, resultSize.columns, resultSize.columns);
 			for (int row = 0; row < size.rows; row++) {
 				for (int column = 0; column < size.columns; column++) {
@@ -1913,7 +1957,8 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 				debug_log("bufferMatrixManipulate: source matrix %d not found\n\r", sourceId);
 				return;
 			}
-			float source[sourceSize.size()] = {0.0f};
+			float source[sourceSize.size()];
+			memset(source, 0, sizeof(source));
 			if (!getMatrixFromBuffer(sourceId, source, sourceSize)) {
 				debug_log("bufferMatrixManipulate: failed to read matrix from buffer %d\n\r", sourceId);
 				return;
@@ -1940,7 +1985,8 @@ void VDUStreamProcessor::bufferMatrixManipulate(uint16_t bufferId, uint8_t comma
 				return;
 			}
 			// read source matrix
-			float source[sourceSize.size()] = {0.0f};
+			float source[sourceSize.size()];
+			memset(source, 0, sizeof(source));
 			if (!getMatrixFromBuffer(sourceId, source, sourceSize)) {
 				debug_log("bufferMatrixManipulate: failed to read matrix from buffer %d\n\r", sourceId);
 				return;
@@ -2101,8 +2147,8 @@ void VDUStreamProcessor::bufferTransformBitmap(uint16_t bufferId, uint8_t option
 
 	debug_log("bufferTransformBitmap: width %d, height %d, xOffset %d, yOffset %d\n\r", width, height, xOffset, yOffset);
 
-    for (int y = 0; y < height; y++) {
-    	for (int x = 0; x < width; x++) {
+	for (int y = 0; y < height; y++) {
+		for (int x = 0; x < width; x++) {
 			// calculate the source pixel
 			// NB we will need to adjust x,y here if we are auto-translating
 			pos[0] = (float)x + xOffset;
@@ -2114,7 +2160,7 @@ void VDUStreamProcessor::bufferTransformBitmap(uint16_t bufferId, uint8_t option
 			}
 			destination[(int)y * width + (int)x] = srcPixel;
 		}
-    }
+	}
 
 	// save new bitmap data to target buffer
 	bufferClear(bufferId);
@@ -2307,6 +2353,59 @@ void VDUStreamProcessor::bufferTransformData(uint16_t bufferId, uint8_t options,
 	debug_log("bufferTransformData: copied %d streams into buffer %d (%d)\n\r", streams.size(), bufferId, buffers[bufferId].size());
 }
 
+// VDU 23, 0, &A0, bufferId; &30, options, offset; flagId; [default[;]]
+// Copy a flag value into a buffer at a given offset
+//
+void VDUStreamProcessor::bufferReadFlag(uint16_t bufferId) {
+	auto options = readByte_t();
+	if (options == -1) {
+		return;
+	}
+	bool useAdvancedOffsets = options & READ_FLAG_ADVANCED_OFFSETS;
+	bool useDefault = options & READ_FLAG_USE_DEFAULT;
+	bool use16Bit = options & READ_FLAG_16BIT;
+
+	auto offset = getOffsetFromStream(useAdvancedOffsets);
+	if (offset.blockOffset == -1) {
+		return;
+	}
+	auto flagId = readWord_t();
+	if (flagId == -1) {
+		return;
+	}
+
+	uint32_t defaultValue = 0;
+	if (useDefault) {
+		defaultValue = use16Bit ? readWord_t() : readByte_t();
+		if (defaultValue == -1) {
+			return;
+		}
+	}
+
+	// Does our target exist?
+	auto target = getBufferSpan(bufferId, offset, use16Bit ? 2 : 1);
+	if (target.empty()) {
+		debug_log("bufferReadFlag: buffer %d not found or offset %d out of range\n\r", bufferId, offset.blockOffset);
+		return;
+	}
+
+	if (isFeatureFlagSet(flagId)) {
+		// flag exists, so write it to the buffer
+		auto value = getFeatureFlag(flagId);
+		target.front() = value & 0xFF;
+		if (use16Bit) {
+			target[1] = value >> 8;
+		}
+	} else if (useDefault) {
+		// flag doesn't exist, so write the default value to the buffer
+		target.front() = defaultValue & 0xFF;
+		if (use16Bit) {
+			target[1] = defaultValue >> 8;
+		}
+	} else {
+		debug_log("bufferReadFlag: flag %d not found and no default value\n\r", flagId);
+	}
+}
 
 // VDU 23, 0, &A0, bufferId; &40, sourceBufferId; : Compress blocks from a buffer
 // Compress (blocks from) a buffer into a new buffer.
@@ -2630,5 +2729,30 @@ void VDUStreamProcessor::bufferExpandBitmap(uint16_t bufferId, uint8_t options, 
 	}
 	debug_log("bufferExpandBitmap: expanded %d bytes into buffer %d\n\r", outputSize, bufferId);
 }
+
+void VDUStreamProcessor::bufferAddCallback(uint16_t bufferId, uint16_t type) {
+	callbackBuffers[type].insert(bufferId);
+}
+
+void VDUStreamProcessor::bufferRemoveCallback(uint16_t bufferId, uint16_t type) {
+	if (type == 65535) {
+		for (auto & cb : callbackBuffers) {
+			bufferRemoveCallback(bufferId, cb.first);
+		}
+		return;
+	}
+	if (bufferId == 65535) {
+		callbackBuffers.erase(type);
+		return;
+	}
+	callbackBuffers[type].erase(bufferId);
+}
+
+void VDUStreamProcessor::bufferCallCallbacks(uint16_t type) {
+	for (const auto & bufferId : callbackBuffers[type]) {
+		bufferCall(bufferId, {});
+	}
+}
+
 
 #endif // VDU_BUFFERED_H

@@ -13,6 +13,7 @@ uint8_t			_keycode = 0;					// Last pressed key code
 uint8_t			_modifiers = 0;					// Last pressed key modifiers
 uint16_t		kbRepeatDelay = 500;			// Keyboard repeat delay ms (250, 500, 750 or 1000)		
 uint16_t		kbRepeatRate = 100;				// Keyboard repeat rate ms (between 33 and 500)
+uint8_t			kbRegion = 0;					// Keyboard region
 
 bool			mouseEnabled = false;			// Mouse enabled
 uint8_t			mSampleRate = MOUSE_DEFAULT_SAMPLERATE;	// Mouse sample rate
@@ -23,11 +24,17 @@ uint32_t		mWheelAcc = MOUSE_DEFAULT_WHEELACC;	// Mouse wheel acceleration
 
 // Forward declarations
 //
-bool resetMousePositioner(uint16_t width, uint16_t height, fabgl::VGABaseController * display);
+#ifdef USERSPACE
+bool zdi_mode () { return false; }
+void zdi_enter () {}
+void zdi_process_cmd (uint8_t key) {}
+#else
+bool zdi_mode ();
+void zdi_enter ();
+void zdi_process_cmd (uint8_t key);
+#endif
 
-extern bool zdi_mode();
-extern void zdi_enter();
-extern void zdi_process_cmd(uint8_t key);
+bool resetMousePositioner(uint16_t width, uint16_t height, fabgl::VGABaseController * display);
 extern bool consoleMode;
 extern HardwareSerial DBGSerial;
 
@@ -78,8 +85,10 @@ void setKeyboardLayout(uint8_t region) {
 		case 17: kb->setLayout(&fabgl::DvorakLayout); break;
 		default:
 			kb->setLayout(&fabgl::UKLayout);
+			region = 0;
 			break;
 	}
+	kbRegion = region;
 }
 
 // Get keyboard key presses
@@ -110,7 +119,7 @@ bool getKeyboardKey(uint8_t *keycode, uint8_t *modifiers, uint8_t *vk, uint8_t *
 			return true;			
 		}
 	}
-	
+
 	if (kb->getNextVirtualKey(&item, 0)) {
 		if (item.down) {
 			switch (item.vk) {
@@ -133,7 +142,7 @@ bool getKeyboardKey(uint8_t *keycode, uint8_t *modifiers, uint8_t *vk, uint8_t *
 					_keycode = 0x7F;
 					break;
 				default:
-					_keycode = item.ASCII;	
+					_keycode = item.ASCII;
 					break;
 			}
 			// Pack the modifiers into a byte

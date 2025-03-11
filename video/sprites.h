@@ -27,6 +27,7 @@ std::unordered_map<uint16_t, std::vector<uint8_t, psram_allocator<uint8_t>>> bit
 std::unordered_map<uint16_t, fabgl::Cursor> cursors;	// Storage for our cursors
 uint16_t		mCursor = MOUSE_DEFAULT_CURSOR;	// Mouse cursor
 
+extern bool isFeatureFlagSet(uint16_t flag);
 
 std::shared_ptr<Bitmap> getBitmap(uint16_t id) {
 	if (bitmaps.find(id) != bitmaps.end()) {
@@ -146,8 +147,59 @@ void addSpriteFrame(uint16_t bitmapId) {
 		debug_log("addSpriteFrame: bitmap %d not found\n\r", bitmapId);
 		return;
 	}
+	if (bitmap->format == PixelFormat::Native || bitmap->format == PixelFormat::Undefined) {
+		debug_log("addSpriteFrame: bitmap %d is in native or unknown format and cannot be used as a sprite frame\n\r", bitmapId);
+		return;
+	}
 	bitmapUsers[bitmapId].push_back(current_sprite);
 	sprite->addBitmap(bitmap.get());
+	if (bitmap->format == PixelFormat::Mask) {
+		sprite->hardware = 0;
+	}
+}
+
+void replaceSpriteFrame(uint16_t bitmapId) {
+	auto sprite = getSprite();
+	auto bitmap = getBitmap(bitmapId);
+	if (!bitmap) {
+		debug_log("replaceSpriteFrame: bitmap %d not found\n\r", bitmapId);
+		return;
+	}
+	if (bitmap->format == PixelFormat::Native || bitmap->format == PixelFormat::Undefined) {
+		debug_log("replaceSpriteFrame: bitmap %d is in native or unknown format and cannot be used as a sprite frame\n\r", bitmapId);
+		return;
+	}
+
+	// remove one instance of current_sprite from the bitmapUsers list for the shown frame
+	// first step is to work out the bitmap ID of the current frame
+	auto frameBitmap = sprite->frames[sprite->currentFrame];
+	auto oldBitmapId = -1;
+	for (auto bitmap : bitmaps) {
+		if (bitmap.second.get() == frameBitmap) {
+			oldBitmapId = bitmap.first;
+			break;
+		}
+	}
+
+	// if we found the old bitmap, remove one entry of the sprite from the bitmapUsers list
+	if (oldBitmapId != -1) {
+		auto users = bitmapUsers[oldBitmapId];
+		for (auto user : users) {
+			// remove only one copy of current_sprite from the users list, if it exists
+			auto it = std::find(users.begin(), users.end(), current_sprite);
+			if (it != users.end()) {
+				users.erase(it);
+				break;
+			}
+		}
+	}
+
+	sprite->frames[sprite->currentFrame] = bitmap.get();
+	bitmapUsers[bitmapId].push_back(current_sprite);
+
+	if (bitmap->format == PixelFormat::Mask) {
+		sprite->hardware = 0;
+	}
 }
 
 void activateSprites(uint8_t n) {
@@ -199,6 +251,16 @@ void hideSprite(uint8_t s = current_sprite) {
 	sprite->visible = 0;
 }
 
+void setSpriteHardware() {
+	auto sprite = getSprite();
+	sprite->hardware = 1;
+}
+
+void setSpriteSoftware() {
+	auto sprite = getSprite();
+	sprite->hardware = 0;
+}
+
 void moveSprite(int x, int y) {
 	auto sprite = getSprite();
 	sprite->moveTo(x, y);
@@ -228,21 +290,23 @@ void hideAllSprites() {
 void resetSprites() {
 	waitPlotCompletion();
 	hideAllSprites();
+	bool autoHardwareSprites = isFeatureFlagSet(TESTFLAG_HW_SPRITES) && isFeatureFlagSet(FEATURE_FLAG_AUTO_HW_SPRITES);
 	for (auto n = 0; n < MAX_SPRITES; n++) {
+		auto sprite = getSprite(n);
+		sprite->hardware = autoHardwareSprites ? 1 : 0;
 		clearSpriteFrames(n);
 	}
 	activateSprites(0);
 	setCurrentSprite(0);
-	// replace all the sprite objects
-	// for (auto n = 0; n < MAX_SPRITES; n++) {
-	// 	sprites[n] = Sprite();
-	// }
 }
 
 void setSpritePaintMode(uint8_t mode) {
 	auto sprite = getSprite();
 	if (mode <= 7) {
 		sprite->paintOptions.mode = static_cast<fabgl::PaintMode>(mode);
+		if (mode > 0) {
+			sprite->hardware = 0;
+		}
 	}
 }
 

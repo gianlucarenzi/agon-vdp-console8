@@ -36,6 +36,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <optional>
 #include <memory>
 
@@ -113,6 +114,12 @@ public:
 		p->~T();
 	}
 };
+
+template <typename T, typename U>
+bool operator==(const psram_allocator<T>&, const psram_allocator<U>&) { return true; }
+
+template <typename T, typename U>
+bool operator!=(const psram_allocator<T>&a, const psram_allocator<U>&b) { return !(a == b); }
 
 // Typically we do not need a deleter because the regular one can handle PSRAM deallocations just fine,
 // but for completeness, here it is.
@@ -299,3 +306,20 @@ uint32_t convertFloatToValue(float rawValue, bool is16Bit, bool isFixed, int8_t 
 	}
 };
 
+// This returns an INT32 because it will return either the value
+// in the range 0-65535 or -1 if the string is invalid.
+int32_t textToWord(const char * text) {
+	int32_t val = 0;
+	int8_t digit = 0;
+
+	if (!isdigit(text[0])) {
+		debug_log("convert to ASCII text %s invalid\n\r", text);
+		return -1;
+	};
+	while (isdigit(text[digit]) && digit<6) {
+		val = (val * 10) + text[digit] - '0';
+		digit++;
+	};
+	debug_log("converted text %s is %u\n\r", text,val);
+	return (val < 65536 ? val : -1);
+};

@@ -14,6 +14,7 @@
 #include "buffers.h"
 #include "sprites.h"
 #include "types.h"
+#include "mat.h"
 
 // Definitions for the functions we're implementing here
 #include "context.h"
@@ -543,6 +544,7 @@ void Context::setGraphicsColour(uint8_t mode, uint8_t colour) {
 	else {
 		debug_log("vdu_gcol: invalid mode %d\n\r", mode);
 	}
+	plottingText = false;
 }
 
 // Update selected colours based on palette change in 64 colour modes
@@ -826,6 +828,8 @@ void Context::drawBitmap(uint16_t x, uint16_t y, bool compensateHeight, bool for
 				auto &transformBuffer = transformBufferIter->second;
 				if (!checkTransformBuffer(transformBuffer)) {
 					debug_log("drawBitmap: transform buffer %d is invalid\n\r", bitmapTransform);
+					bitmapTransform = 65535;
+					canvas->drawBitmap(x, yPos, bitmap.get());
 					return;
 				}
 				// NB: if we're drawing via PLOT and are using OS coords, then we _should_ be using bottom left of bitmap as our "origin" for transforms
@@ -873,6 +877,7 @@ void Context::setAffineTransform(uint8_t flags, uint16_t bufferId) {
 // Clear the screen
 //
 void Context::cls() {
+	hideCursor();
 	if (hasActiveSprites()) {
 		activateSprites(0);
 	}
@@ -886,6 +891,7 @@ void Context::cls() {
 	}
 	cursorHome();
 	setPagedMode(pagedMode);
+	showCursor();
 }
 
 // Clear the graphics area

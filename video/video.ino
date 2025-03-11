@@ -45,13 +45,28 @@
 // 12/09/2023:					+ Refactored
 // 17/09/2023:					+ Added ZDI mode
 
-#include <esp_task_wdt.h>
 #include <HardwareSerial.h>
 #include <WiFi.h>
 #include <fabgl.h>
+#include <ESP32Time.h>
 
-#define	DEBUG			0						// Serial Debug Mode: 1 = enable
+// Serial Debug Mode: 1 = enable
+// Always enabled on the emulator, to support --verbose mode
+#ifdef USERSPACE
+#undef DEBUG
+# define	DEBUG			1
+#else /* !USERSPACE */
+#undef DEBUG
+# define	DEBUG			0
+#endif /* USERSPACE */
+
 #define SERIALBAUDRATE	115200
+
+#ifdef USERSPACE
+extern uint32_t startup_screen_mode; /* in rust_glue.cpp */
+#else /* !USERSPACE */
+#define startup_screen_mode 0
+#endif /* !USERSPACE */
 
 HardwareSerial	DBGSerial(0);
 
@@ -61,6 +76,8 @@ TerminalState	terminalState = TerminalState::Disabled;		// Terminal state (for C
 bool			consoleMode = false;			// Serial console mode (0 = off, 1 = console enabled)
 bool			printerOn = false;				// Output "printer" to debug serial link
 bool			controlKeys = true;				// Control keys enabled
+uint			lastFrameCounter = 0;			// Last frame counter
+ESP32Time		rtc(0);							// The RTC
 
 #include "version.h"							// Version information
 #include "agon_ps2.h"							// Keyboard support
@@ -71,10 +88,12 @@ bool			controlKeys = true;				// Control keys enabled
 #include "vdu_stream_processor.h"
 #include "hexload.h"
 
-std::unique_ptr<fabgl::Terminal>	Terminal;	// Used for CP/M mode
+std::unique_ptr<fabgl::Terminal>	Terminal;	// Used for Terminal emulation mode (for CP/M, etc)
 VDUStreamProcessor *	processor;				// VDU Stream Processor
 
+#ifndef USERSPACE
 #include "zdi.h"								// ZDI debugging console
+#endif /* !USERSPACE */
 
 TaskHandle_t		Core0Task;					// Core 0 task handle
 
@@ -84,7 +103,7 @@ void setup() {
 		disableCore1WDT(); delay(200);
 	#endif
 	DBGSerial.begin(SERIALBAUDRATE, SERIAL_8N1, 3, 1);
-	changeMode(0);
+	changeMode(startup_screen_mode);
 	copy_font();
 	setupVDPProtocol();
 	processor = new VDUStreamProcessor(&VDPSerial);
@@ -114,13 +133,30 @@ void loop() {
 }
 
 void processLoop(void * parameter) {
+#ifdef USERSPACE
+	uint32_t count = 0;
+#endif /* USERSPACE */
+
 	while (true) {
+#ifdef USERSPACE
+ 		if ((count & 0x7f) == 0) {
+			delay(1 /* -TM- ms */);
+		}
+ 		count++;
+#endif /* USERSPACE */
+
 		#ifdef VDP_USE_WDT
 			esp_task_wdt_reset();
 		#endif
 		if (processTerminal()) {
 			continue;
 		}
+
+		if (_VGAController->frameCounter != lastFrameCounter) {
+			lastFrameCounter = _VGAController->frameCounter;
+			processor->bufferCallCallbacks(CALLBACK_VSYNC);
+		}
+
 		processor->doCursorFlash();
 
 		do_keyboard();
@@ -143,7 +179,7 @@ void do_keyboard() {
 	uint8_t modifiers;
 	uint8_t vk;
 	uint8_t down;
-	if (getKeyboardKey(&keycode, &modifiers, &vk, &down)) {
+	while (getKeyboardKey(&keycode, &modifiers, &vk, &down)) {
 		// Handle some control keys
 		//
 		if (controlKeys && down) {
@@ -173,16 +209,6 @@ void do_keyboard() {
 	}
 }
 
-// Handle the keyboard: CP/M Terminal Mode
-// 
-void do_keyboard_terminal() {
-	uint8_t ascii;
-	if (getKeyboardKey(&ascii)) {
-		// send raw byte straight to z80
-		processor->writeByte(ascii);
-	}
-}
-
 // Handle the mouse
 //
 void do_mouse() {
@@ -208,14 +234,12 @@ void boot_screen() {
 	#ifdef VERSION_BUILD
 		printFmt(" Build %s", VERSION_BUILD);
 	#endif
-	#ifdef VDP_RETROBIT_LAB
-		printFmt(" RetroBitLab Version (master branch)");
-	#endif
 	printFmt("\n\r");
 }
 
 // Debug printf to PC
 //
+#ifndef USERSPACE
 void debug_log(const char *format, ...) {
 	#if DEBUG == 1
 	va_list ap;
@@ -231,6 +255,7 @@ void debug_log(const char *format, ...) {
 	va_end(ap);
 	#endif
 }
+#endif
 
 void force_debug_log(const char *format, ...) {
 	va_list ap;
@@ -309,14 +334,12 @@ bool processTerminal() {
 		} break;
 		case TerminalState::Suspended: {
 			// Terminal temporarily deactivated, so pass on to VDU system
-			// but keep processing keyboard input
-			do_keyboard_terminal();
 			return false;
 		} break;
 		case TerminalState::Enabling: {
 			// Turn on the terminal
 			Terminal = std::unique_ptr<fabgl::Terminal>(new fabgl::Terminal());
-			Terminal->begin(_VGAController.get());	
+			Terminal->begin(_VGAController.get());
 			Terminal->connectSerialPort(VDPSerial);
 			Terminal->enableCursor(true);
 			// onVirtualKey is triggered whenever a key is pressed or released
@@ -338,12 +361,20 @@ bool processTerminal() {
 				if (strcmp("S!", seq) == 0) {
 					suspendTerminal();
 				}
+				if (seq[0] == 'F') {
+					uint32_t fontnum = textToWord(seq + 1);
+					if (fontnum >= 0) {
+						auto font = fonts[fontnum]; 	// get shared_ptr to font -- was fonts[bufferID]
+						if (font != nullptr && font->chptr == nullptr) {	// check it's defined
+							Terminal->loadFont(font.get());
+						}
+					}
+				}
 			};
 			debug_log("Terminal enabled\n\r");
 			terminalState = TerminalState::Enabled;
 		} break;
 		case TerminalState::Enabled: {
-			do_keyboard_terminal();
 			// Write anything read from z80 to the screen
 			// but do this a byte at a time, as VDU commands after a "suspend" will get lost
 			if (processor->byteAvailable()) {
@@ -355,13 +386,7 @@ bool processTerminal() {
 			Terminal = nullptr;
 			auto context = processor->getContext();
 			// reset our screen mode
-			if (changeMode(videoMode) != 0) {
-				debug_log("processTerminal: Error %d changing back to mode %d\n\r", videoMode);
-				videoMode = 1;
-				changeMode(1);
-			}
-			context->reset();
-			processor->sendModeInformation();
+			processor->vdu_mode(videoMode);
 			debug_log("Terminal disabled\n\r");
 			terminalState = TerminalState::Disabled;
 		} break;

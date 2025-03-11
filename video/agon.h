@@ -77,6 +77,7 @@
 #define VDP_FONT				0x95	// Font management commands
 #define VDP_AFFINE_TRANSFORM	0x96	// Set affine transform
 #define VDP_CONTROLKEYS			0x98	// Control keys on/off
+#define VDP_CHECKKEY			0x99	// Request updated keyboard data for a key
 #define VDP_BUFFER_PRINT		0x9B	// Print a buffer of characters literally with no command interpretation
 #define VDP_TEXT_VIEWPORT		0x9C	// Set text viewport using current graphics coordinates
 #define VDP_GRAPHICS_VIEWPORT	0x9D	// Set graphics viewport using current graphics coordinates
@@ -86,12 +87,14 @@
 #define VDP_UPDATER				0xA1	// Update VDP
 #define VDP_LOGICALCOORDS		0xC0	// Switch BBC Micro style logical coords on and off
 #define VDP_LEGACYMODES			0xC1	// Switch VDP 1.03 compatible modes on and off
+#define VDP_LAYERS				0xC2	// Tile engine layer management commands (experimental)
 #define VDP_SWITCHBUFFER		0xC3	// Double buffering control
+#define VDP_COPPER				0xC4	// "Copper" style commands
 #define VDP_CONTEXT				0xC8	// Context management commands
 #define VDP_FLUSH_DRAWING_QUEUE	0xCA	// Flush the drawing queue
 #define VDP_PATTERN_LENGTH		0xF2	// Set pattern length (*FX 163,242,n)
-#define VDP_TESTFLAG_SET		0xF8	// Set a test flag
-#define VDP_TESTFLAG_CLEAR		0xF9	// Clear a test flag
+#define VDP_FEATUREFLAG_SET		0xF8	// Set a test flag
+#define VDP_FEATUREFLAG_CLEAR	0xF9	// Clear a test flag
 #define VDP_CONSOLEMODE			0xFE	// Switch console mode on and off
 #define VDP_TERMINALMODE		0xFF	// Switch to terminal mode
 
@@ -108,6 +111,8 @@
 #define PACKET_RTC				0x07	// RTC
 #define PACKET_KEYSTATE			0x08	// Keyboard repeat rate and LED status
 #define PACKET_MOUSE			0x09	// Mouse data
+#define PACKET_ECHO				0x0A	// Echo
+#define PACKET_ECHO_END			0x0B	// Echo end
 
 #define AUDIO_CHANNELS			3		// Default number of audio channels
 #define AUDIO_DEFAULT_SAMPLE_RATE	16384	// Default sample rate
@@ -238,6 +243,7 @@
 #define CONTEXT_SAVE_AND_SELECT			5		// Save and get a copy of topmost context from numbered stack
 #define CONTEXT_RESTORE_ALL				6		// Clear stack and restore to first context in stack
 #define CONTEXT_CLEAR_STACK				7		// Clear stack, keeping current context
+#define CONTEXT_DEBUG					0x80	// Get debug info about a context
 
 #define CONTEXT_RESET_GPAINT			0x01	// graphics painting options
 #define CONTEXT_RESET_GPOS				0x02	// graphics positioning incl graphics viewport
@@ -281,9 +287,14 @@
 #define BUFFERED_MATRIX					0x22	// Create or combine a matrix buffer of arbitrary dimensions
 #define BUFFERED_TRANSFORM_BITMAP		0x28	// Create a new bitmap from an existing one by applying a 2d transform
 #define BUFFERED_TRANSFORM_DATA			0x29	// Transform data using a given matrix
+#define BUFFERED_READ_FLAG				0x30	// Read flag value into a buffer
 #define BUFFERED_COMPRESS				0x40	// Compress blocks from multiple buffers into one buffer
 #define BUFFERED_DECOMPRESS				0x41	// Decompress blocks from multiple buffers into one buffer
 #define BUFFERED_EXPAND_BITMAP			0x48	// Expand a bitmap buffer
+#define BUFFERED_ADD_CALLBACK			0x50	// Add a callback
+#define BUFFERED_REMOVE_CALLBACK		0x51	// Remove a callback
+// #define BUFFERED_ADD_TIMER_CALLBACK		0x52	// Add a timer callback
+// #define BUFFERED_REMOVE_TIMER_CALLBACK	0x53	// Remove a timer callback
 
 #define BUFFERED_DEBUG_INFO				0x80	// Get debug info about a buffer
 
@@ -319,7 +330,9 @@
 // Conditional operation flags
 #define COND_OP_MASK			0x0F	// conditional operation code mask
 #define COND_ADVANCED_OFFSETS	0x10	// advanced offset values
-#define COND_BUFFER_VALUE		0x20	// value to compare is a buffer-fetched value
+#define COND_BUFFER_VALUE		0x20	// value to compare against is a buffer-fetched value
+#define COND_FLAG_VALUE			0x40	// condition source value is a flag
+#define COND_16BIT				0x80	// values to compare are a 16-bit
 
 // Reverse operation flags
 #define REVERSE_16BIT			0x01	// 16-bit value length
@@ -399,12 +412,63 @@
 #define TRANSFORM_DATA_BUFFER_ARGS	0x20	// Optional argument values are fetched from buffers
 #define TRANSFORM_DATA_PER_BLOCK	0x40	// Transform data per block
 
+// Read flag flags
+#define READ_FLAG_ADVANCED_OFFSETS	0x10	// advanced, 24-bit offsets (16-bit block offset follows if top bit set)
+#define READ_FLAG_USE_DEFAULT		0x40	// use default value if flag not set
+#define READ_FLAG_16BIT				0x80	// value to set is 16-bit
+
 // Buffered bitmap and sample info
 #define BUFFERED_BITMAP_BASEID	0xFA00	// Base ID for buffered bitmaps
 #define BUFFERED_SAMPLE_BASEID	0xFB00	// Base ID for buffered samples
 
-// Test flags
-#define TEST_FLAG_AFFINE_TRANSFORM	1	// Affine transform test flag
+// Copper commands
+#define COPPER_CREATE_PALETTE		0		// Create a palette
+#define COPPER_DELETE_PALLETE		1		// Delete a palette
+#define COPPER_SET_PALETTE_COLOUR	2		// Set a palette item (colour)
+#define COPPER_UPDATE_SIGNALLIST	3		// Update the signal list
+#define COPPER_RESET_SIGNALLIST		4		// Reset the signal list
+
+// Callback types
+#define CALLBACK_VSYNC				0		// VSync callback
+#define CALLBACK_MODE_CHANGE		1		// Mode callback
+// Future callback types may include timer, audio playback complete, etc.
+
+// Test/Feature flags
+#define TESTFLAG_AFFINE_TRANSFORM	1	// Affine transform test flag
+#define TESTFLAG_HW_SPRITES			2	// Hardware sprites test flag
+
+#define FEATUREFLAG_FULL_DUPLEX	0x0101	// Full duplex UART comms flag
+#define FEATUREFLAG_MOS_VDPP_BUFFERSIZE	0x0102	// Buffer size on MOS for VDP protocol packets
+#define FEATUREFLAG_ECHO		0x0110	// Echo back received data, for redirect/spool
+// #define FEATUREFLAG_ECHO_SETTINGS	0x0111	// Settings for what will be echo'd
+#define FEATUREFLAG_SYSTEM_BEGIN	0x0200	// General system settings start at 0x0200
+#define FEATUREFLAG_SYSTEM_END	0x02FF	// General system settings end
+#define FEATUREFLAG_RTC_YEAR	0x0200	// RTC year is 4 digits
+#define FEATUREFLAG_RTC_MONTH	0x0201	// RTC month is 1-12
+#define FEATUREFLAG_RTC_DAY		0x0202	// RTC day is 1-31
+#define FEATUREFLAG_RTC_HOUR	0x0203	// RTC hour is 0-23
+#define FEATUREFLAG_RTC_MINUTE	0x0204	// RTC minute is 0-59
+#define FEATUREFLAG_RTC_SECOND	0x0205	// RTC second is 0-59
+#define FEATUREFLAG_RTC_MILLIS	0x0206	// RTC millisecond is 0-999
+#define FEATUREFLAG_RTC_WEEKDAY	0x0207	// RTC weekday is 0-6
+#define FEATUREFLAG_RTC_YEARDAY	0x0208	// RTC day of year is 0-366
+#define FEATUREFLAG_FREEPSRAM_LOW	0x0210	// Free PSRAM low bytes
+#define FEATUREFLAG_FREEPSRAM_HIGH	0x0211	// Free PSRAM high bytes
+#define FEATUREFLAG_BUFFERS_USED	0x0212	// Number of buffers used
+#define FEATUREFLAG_KEYBOARD_LAYOUT	0x0220	// Keyboard layout
+#define FEATUREFLAG_KEYBOARD_CTRL_KEYS	0x0221	// Control keys on/off
+#define FEATUREFLAG_CONTEXT_ID	0x0230	// Current active context ID
+#define FEATUREFLAG_TILE_ENGINE	0x0300	// Tile engine flag (layers commands)
+#define FEATUREFLAG_COPPER		0x0310	// Copper feature flag
+#define FEATURE_FLAG_AUTO_HW_SPRITES	0x0400	// Auto hardware sprites flag
+#define FEATUREFLAG_VDU_VARIABLES_START	0x1000	// VDU variables start at 0x1000
+#define FEATUREFLAG_VDU_VARIABLES_END	0x1FFF	// VDU variables end
+#define FEATUREFLAG_VDU_VARIABLES_MASK	0x0FFF	// VDU variables mask
+
+#define VDU_VAR_PALETTE			0x200	// Palette variables start (block of 64)
+#define VDU_VAR_PALETTE_END		0x23F	// Palette variables end
+#define VDU_VAR_CHARMAPPING		0x300	// Character to bitmap mapping start (block of 256)
+#define VDU_VAR_CHARMAPPING_END	0x3FF	// Character to bitmap mapping end
 
 #define LOGICAL_SCRW			1280	// As per the BBC Micro standard
 #define LOGICAL_SCRH			1024

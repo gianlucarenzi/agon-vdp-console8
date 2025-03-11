@@ -33,7 +33,6 @@ The AGON documentation can now be found on the [Community Documentation](https:/
 This project makes use of [PlatformIO](https://platformio.org) to build the firmware.  Using the PlatformIO IDE with Visual Studio Code is recommended, but it is also possible to use the PlatformIO CLI.
 
 Previously, it was also possible to use the Arduino IDE to build the firmware, but this is no longer supported.  This is because this project makes use of an updated version of vdp-gl, which is not directly able to be used with the Arduino IDE.  (It is technically still possible to use the Arduino IDE, but it is not recommended, as you would need to manually download the applicable vdp-gl version.)
-
 ### Note
 
 This branch is about using the VDP on 8-bit computers from '80s using a simplified version of serial communication.
