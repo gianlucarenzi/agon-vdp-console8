@@ -45,19 +45,22 @@ typedef union {
 //
 void VDUStreamProcessor::wait_eZ80() {
 	if (esp_reset_reason() == ESP_RST_SW) {
-		return;
-	}
-
-	debug_log("wait_eZ80: Start\n\r");
-	while (!initialised) {
-		if (byteAvailable()) {
-			auto c = readByte();	// Only handle VDU 23 packets
-			if (c == 23) {
-				vdu_sys();
+		// We only perform a s/w reset after flashing, so MOS will already be running
+		initialised = true;
+	} else {
+		debug_log("wait_eZ80: Start\n\r");
+		while (!initialised) {
+			if (byteAvailable()) {
+				auto c = readByte();	// Only handle VDU 23 packets
+				if (c == 23) {
+					vdu_sys();
+				}
 			}
 		}
+		debug_log("wait_eZ80: End\n\r");	
 	}
-	debug_log("wait_eZ80: End\n\r");
+
+	sendModeInformation();
 }
 
 // Handle SYS
@@ -266,6 +269,10 @@ void VDUStreamProcessor::vdu_sys_video() {
 			// NB must use a virtual key here, as we can't convert a keycode to a virtual key
 			auto keyboard = getKeyboard();
 			keyboard->injectVirtualKey((VirtualKey) key, keyboard->isVKDown((VirtualKey) key), false);
+		}	break;
+		case VDP_TEMP_PAGED_MODE: {		// VDU 23, 0, &9A
+			// Set temporary paged mode
+			context->setTempPagedMode();
 		}	break;
 		case VDP_BUFFER_PRINT: {		// VDU 23, 0, &9B
 			auto bufferId = readWord_t();

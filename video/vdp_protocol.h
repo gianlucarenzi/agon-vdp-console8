@@ -31,25 +31,9 @@ void setupVDPProtocol() {
 	VDPSerial.begin(UART_BR, SERIAL_8N1, UART_RX, UART_TX);
 #ifndef VDP_RETROBIT_LAB
 	VDPSerial.setPins(UART_NA, UART_NA, UART_CTS, UART_RTS);	// Must be called after begin
-	setVDPProtocolDuplex(false);					// Start with half-duplex
+	setVDPProtocolDuplex(false);								// Start with half-duplex
 	VDPSerial.setTimeout(COMMS_TIMEOUT);
 #endif
-}
-
-// TODO remove the following - it's only here for cursor.h to send escape key when doing paged mode handling
-
-inline void writeByte(uint8_t b) {
-	VDPSerial.write(b);
-}
-
-// Send a packet of data to the MOS
-//
-void send_packet(uint8_t code, uint16_t len, uint8_t data[]) {
-	writeByte(code + 0x80);
-	writeByte(len);
-	for (int i = 0; i < len; i++) {
-		writeByte(data[i]);
-	}
 }
 
 #endif // AGON_VDP_PROTOCOL_H
