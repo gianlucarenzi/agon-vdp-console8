@@ -2,3 +2,5 @@
 .vscode
 .DS_Store
 video/build
+/vdp_benchmark
+build
