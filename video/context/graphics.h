@@ -77,6 +77,28 @@ void Context::setGraphicsFill(uint8_t mode) {
 	}
 }
 
+// Update selected colours based on palette change in 64 colour modes
+//
+void Context::updateColours(uint8_t logical, uint8_t physical) {
+	plottingText = false;
+	auto lookedup = colourLookup[physical];
+	if (logical == tfgc) {
+		tfg = lookedup;
+	}
+	if (logical == tbgc) {
+		tbg = lookedup;
+	}
+	if (logical == tfgc || logical == tbgc) {
+		updateTextCursorBitmap();
+	}
+	if (logical == gfgc) {
+		gfg = lookedup;
+	}
+	if (logical == gbgc) {
+		gbg = lookedup;
+	}
+}
+
 // Set a clipping rectangle
 //
 inline void Context::setClippingRect(Rect rect) {
@@ -111,6 +133,7 @@ void Context::moveTo() {
 void Context::plotLine(bool omitFirstPoint, bool omitLastPoint, bool usePattern, bool resetPattern) {
 	if (!textCursorActive()) {
 		// if we're in graphics mode, we need to move the cursor to the last point
+		// TODO think about this - why do we _not_ do this when the text cursor is active??
 		canvas->moveTo(p2.X, p2.Y);
 	}
 
@@ -511,6 +534,8 @@ void Context::setTextColour(uint8_t colour) {
 	else {
 		debug_log("vdu_colour: invalid colour %d\n\r", colour);
 	}
+
+	updateTextCursorBitmap();
 }
 
 // Set graphics colour (handles GCOL / VDU 18)
@@ -545,25 +570,6 @@ void Context::setGraphicsColour(uint8_t mode, uint8_t colour) {
 		debug_log("vdu_gcol: invalid mode %d\n\r", mode);
 	}
 	plottingText = false;
-}
-
-// Update selected colours based on palette change in 64 colour modes
-//
-void Context::updateColours(uint8_t l, uint8_t index) {
-	plottingText = false;
-	auto lookedup = colourLookup[index];
-	if (l == tfgc) {
-		tfg = lookedup;
-	}
-	if (l == tbgc) {
-		tbg = lookedup;
-	}
-	if (l == gfgc) {
-		gfg = lookedup;
-	}
-	if (l == gbgc) {
-		gbg = lookedup;
-	}
 }
 
 // Get currently set colour values
@@ -780,7 +786,8 @@ void Context::plotString(const std::string& s) {
 	auto font = getFont();
 	// iterate over the string and plot each character
 	for (const char c : s) {
-		if (cursorBehaviour.scrollProtect) {
+		if (cursorIsOffRight()) {
+			// Cursor might be off right from scroll protect, or previous character plot
 			cursorAutoNewline();
 		}
 		if (ttxtMode) {
@@ -794,8 +801,17 @@ void Context::plotString(const std::string& s) {
 			}
 		}
 		if (!cursorBehaviour.xHold) {
-			cursorRight(cursorBehaviour.scrollProtect);
+			cursorRight();
+
+			if (cursorIsOffRight()) {
+				checkPagedMode();
+			}
 		}
+	}
+
+	// If we're not pausing output, then wrap to new line if needed
+	if (processorState == VDUProcessorState::Active && (!cursorBehaviour.scrollProtect || !cursorIsOnBottomRow())) {
+		cursorAutoNewline();
 	}
 }
 
@@ -849,23 +865,6 @@ void Context::drawBitmap(uint16_t x, uint16_t y, bool compensateHeight, bool for
 	}
 }
 
-// Draw cursor
-//
-void Context::drawCursor(Point p) {
-	if (textCursorActive()) {
-		auto font = getFont();
-		if (cursorHStart < font->width && cursorHStart <= cursorHEnd && cursorVStart < font->height && cursorVStart <= cursorVEnd) {
-			canvas->setPaintOptions(cpo);
-			canvas->setBrushColor(tbg);
-			canvas->fillRectangle(p.X + cursorHStart, p.Y + cursorVStart, p.X + std::min(((int)cursorHEnd), font->width - 1), p.Y + std::min(((int)cursorVEnd), font->height - 1));
-			canvas->setBrushColor(tfg);
-			canvas->fillRectangle(p.X + cursorHStart, p.Y + cursorVStart, p.X + std::min(((int)cursorHEnd), font->width - 1), p.Y + std::min(((int)cursorVEnd), font->height - 1));
-			canvas->setPaintOptions(tpo);
-			plottingText = false;
-		}
-	}
-}
-
 // Set affine transform
 //
 void Context::setAffineTransform(uint8_t flags, uint16_t bufferId) {
@@ -877,7 +876,6 @@ void Context::setAffineTransform(uint8_t flags, uint16_t bufferId) {
 // Clear the screen
 //
 void Context::cls() {
-	hideCursor();
 	if (hasActiveSprites()) {
 		activateSprites(0);
 	}
@@ -891,7 +889,6 @@ void Context::cls() {
 	}
 	cursorHome();
 	setPagedMode(pagedMode);
-	showCursor();
 }
 
 // Clear the graphics area
@@ -922,6 +919,7 @@ void Context::resetGraphicsPainting() {
 	gbg = colourLookup[0x00];
 	gpofg = getPaintOptions(fabgl::PaintMode::Set, gpofg);
 	gpobg = getPaintOptions(fabgl::PaintMode::Set, gpobg);
+	updateTextCursorBitmap();
 }
 
 void Context::resetGraphicsOptions() {
@@ -941,11 +939,14 @@ void Context::resetGraphicsPositioning() {
 }
 
 void Context::resetTextPainting() {
+	tfgc = 15 % getVGAColourDepth();
+	tbgc = 0;
 	tfg = colourLookup[0x3F];
 	tbg = colourLookup[0x00];
 	tpo = getPaintOptions(fabgl::PaintMode::Set, tpo);
 	cpo = getPaintOptions(fabgl::PaintMode::XOR, tpo);
 	plottingText = false;
+	updateTextCursorBitmap();
 }
 
 // Reset graphics context, called after a mode change
@@ -973,6 +974,7 @@ void Context::activate() {
 	canvas->setLinePattern(linePattern);
 	canvas->setLinePatternLength(linePatternLength);
 	moveTo();
+	_VGAController->setTextCursor(textCursorSprite.get());
 }
 
 #endif // CONTEXT_GRAPHICS_H
