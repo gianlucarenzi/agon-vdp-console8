@@ -588,9 +588,6 @@ void Context::cursorCR(Point * cursor, Rect * viewport) {
 
 // Move the active cursor to the top-left position in the viewport
 //
-void Context::cursorHome() {
-	cursorHome(activeCursor, activeViewport);
-}
 void Context::cursorHome(Point * cursor, Rect * viewport) {
 	cursorCR(cursor, viewport);
 	cursorTop(cursor, viewport);
