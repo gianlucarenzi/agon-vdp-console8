@@ -262,6 +262,130 @@ int main(int argc, char *argv[]) {
     benchmark_bitmaps();
     benchmark_sprites();
 
+    // Run Mario VDP demo
+    printf("Starting Mario VDP demo in 2 seconds...\n");
+    sleep(2);
+    // Simple integration: spawn demo loop that uses vdp_* wrappers defined above
+    // We'll implement a minimal demo here to send sprite move commands based on
+    // the sequences described in mario_vdp_demo.c
+
+    // Define bitmap for Mario (reuse existing mario_sprite_data)
+    int bitmap_id_sprite = 2;
+    int sprite_id = 1;
+
+    unsigned char cmd_define[] = { VDU_DEFINE_BITMAP, bitmap_id_sprite, MARIO_SPRITE_WIDTH, MARIO_SPRITE_HEIGHT };
+    vdp_send(cmd_define, sizeof(cmd_define));
+    vdp_send(mario_sprite_data, sizeof(mario_sprite_data));
+
+    unsigned char cmd_assign[] = { VDU_ASSIGN_SPRITE, sprite_id, bitmap_id_sprite };
+    vdp_send(cmd_assign, sizeof(cmd_assign));
+    unsigned char cmd_activate[] = { VDU_ACTIVATE_SPRITE, sprite_id };
+    vdp_send(cmd_activate, sizeof(cmd_activate));
+
+    // Demo loop: walk left, idle, walk right, idle, repeat; occasional jump
+    const uint8_t walk_cycle[] = {1,2,3,4,5,4,3,2,1,2,3,4};
+    const size_t walk_len = sizeof(walk_cycle)/sizeof(walk_cycle[0]);
+    size_t walk_idx = 0;
+    int dir = 0; // 0 = left (row 0), 1 = right (row 1)
+    int state = 0; // 0 = walk, 1 = idle_pause, 2 = walk_back, 3 = idle
+    int ticks = 0;
+    const int frame_delay_ms = 120;
+    const int idle_pause_ticks = (2000 / frame_delay_ms);
+
+    while (1) {
+        /* Deterministic demo sequence matching the preview GIF:
+         * - walk (40 ticks) in current direction
+         * - sliding frames (6,7,8) shown longer while still moving a bit
+         * - idle for 250 ms, then jump (parabola)
+         * - land, show idle for 500 ms, invert direction and repeat
+         */
+        const int walk_steps = 40;
+        const int dx = 4; /* pixels per tick */
+        const int frame_t = frame_delay_ms; /* base frame time */
+        const int long_slide_t = 220; /* ms for slide frames */
+        const int pre_jump_idle_ms = 250;
+        const int post_land_idle_ms = 500;
+        const uint8_t slide_seq[] = {6,7,8};
+        const int slide_len = sizeof(slide_seq)/sizeof(slide_seq[0]);
+
+        int x = (dir == 0) ? 1280 : 0; /* starting x for this leg */
+        int y = 200;
+
+        /* WALK phase */
+        for (int s = 0; s < walk_steps; s++) {
+            uint8_t col = walk_cycle[walk_idx % walk_len];
+            walk_idx++;
+            uint16_t sprite_idx = dir * (uint16_t)10 + (uint16_t)col;
+
+            /* compute position */
+            if (dir == 0) x -= dx; else x += dx;
+
+            unsigned char cmd_move[] = { VDU_MOVE_SPRITE_TO, sprite_id };
+            vdp_send(cmd_move, sizeof(cmd_move));
+            vdp_putw(x);
+            vdp_putw(y);
+
+            usleep(frame_t * 1000);
+        }
+
+        /* SLIDE / BRAKE phase: show slide frames longer and continue to move slightly */
+        for (int si = 0; si < slide_len; si++) {
+            uint8_t col = slide_seq[si];
+            uint16_t sprite_idx = dir * (uint16_t)10 + (uint16_t)col;
+
+            /* continue moving slowly during slide */
+            if (dir == 0) x -= dx/2; else x += dx/2;
+
+            unsigned char cmd_move[] = { VDU_MOVE_SPRITE_TO, sprite_id };
+            vdp_send(cmd_move, sizeof(cmd_move));
+            vdp_putw(x);
+            vdp_putw(y);
+
+            usleep(long_slide_t * 1000);
+        }
+
+        /* Idle briefly before jump */
+        {
+            uint16_t idle_idx = dir * (uint16_t)10 + 0;
+            unsigned char cmd_move[] = { VDU_MOVE_SPRITE_TO, sprite_id };
+            vdp_send(cmd_move, sizeof(cmd_move));
+            vdp_putw(x);
+            vdp_putw(y);
+            usleep(pre_jump_idle_ms * 1000);
+        }
+
+        /* Jump: simple vertical parabola */
+        {
+            uint16_t jump_idx = dir * (uint16_t)10 + 9;
+            int jump_offsets[] = {0,-6,-12,-16,-12,-6,0};
+            int jumps = sizeof(jump_offsets)/sizeof(jump_offsets[0]);
+            for (int j = 0; j < jumps; j++) {
+                unsigned char cmd_move[] = { VDU_MOVE_SPRITE_TO, sprite_id };
+                vdp_send(cmd_move, sizeof(cmd_move));
+                vdp_putw(x);
+                vdp_putw(y + jump_offsets[j]);
+                usleep(frame_t * 1000);
+            }
+        }
+
+        /* Land idle for a bit */
+        {
+            unsigned char cmd_move[] = { VDU_MOVE_SPRITE_TO, sprite_id };
+            vdp_send(cmd_move, sizeof(cmd_move));
+            vdp_putw(x);
+            vdp_putw(y);
+            usleep(post_land_idle_ms * 1000);
+        }
+
+        /* invert direction and reset walk index */
+        dir = (dir == 0) ? 1 : 0;
+        walk_idx = 0;
+    }
+
+    // Deactivate sprite (unreachable)
+    vdp_putc(23); vdp_putc(0); vdp_putc(84); vdp_putc(0); // Deactivate sprite 0
+    vdp_clear_screen();
+
     // Cleanup
     close(serial_port);
     printf("Benchmark complete.\n");
