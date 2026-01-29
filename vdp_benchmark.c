@@ -5,11 +5,15 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <sys/time.h>
+#include <stdlib.h>
+#include <string.h>
 #include "mario_sprite.h"
 
 // --- VDP Constants ---
-#define SCREEN_WIDTH 1280
-#define SCREEN_HEIGHT 1024
+// Use 320x240 or 320x256 for sprite benchmark; default to 320x240. Can be
+// overridden with environment variable VDP_HEIGHT=256 for 320x256 mode.
+#define SCREEN_WIDTH 320
+#define SCREEN_HEIGHT (getenv("VDP_HEIGHT") && strcmp(getenv("VDP_HEIGHT"), "256") == 0 ? 256 : 240)
 #define NUM_OPERATIONS 500
 
 // --- VDP Commands ---
